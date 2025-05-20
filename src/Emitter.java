@@ -138,4 +138,9 @@ public class Emitter {
             return hasEmitted && particles.isEmpty();
         }
     }
+    public int getParticlesCount() {
+        synchronized (particles) {
+            return particles.size();
+        }
+    }
 }

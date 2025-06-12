@@ -1,7 +1,7 @@
+// EmitterParallel.java
 import javafx.scene.canvas.GraphicsContext;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
+import java.util.*;
+import java.util.concurrent.*;
 
 public class Emitter {
     private final double x, y;
@@ -9,43 +9,55 @@ public class Emitter {
     private final int maxPart;
     private final String emitType;
     private final double width, height;
+    private final List<Particle> particles = Collections.synchronizedList(new ArrayList<>());
     private boolean hasEmitted = false;
     private int totalEmitted = 0;
-    private final List<Particle> particles;
-    private final int numThreads;
 
-    public Emitter(double x, double y, double emitRate, int maxPart, String emitType, double width, double height) {
+    // Thread‐pool setup
+    private final int numThreads ;
+    private final ExecutorService pool;
+    private final List<Callable<Void>> tasks = new ArrayList<>();
+
+    public Emitter(double x, double y, double emitRate, int maxPart,
+                           String emitType, double width, double height) {
         this.x = x; this.y = y;
         this.emitRate = emitRate;
         this.maxPart = maxPart;
         this.emitType = emitType;
         this.width = width; this.height = height;
-        this.particles = Collections.synchronizedList(new ArrayList<>());
-        this.numThreads = Runtime.getRuntime().availableProcessors();
+        this.numThreads  = Math.max(1, Runtime.getRuntime().availableProcessors() - 1);
+        this.pool = Executors.newFixedThreadPool(numThreads );
     }
+
+
+    public void shutdown() {
+        pool.shutdownNow();
+    }
+
 
     public void emit() {
         int toEmit = 0;
-        if ("continuous".equals(emitType)) { // Continuous emission
-            synchronized (particles) {
-                toEmit = (int) Math.min(emitRate, maxPart - totalEmitted);
-            }
-        } else if ("burst".equals(emitType)) { // Burst emision
-            if (!hasEmitted) {
+        synchronized (particles) {
+            if ("continuous".equals(emitType)) { // Continuous emission
+                toEmit = (int)Math.min(emitRate, maxPart - totalEmitted);
+                totalEmitted += toEmit;
+            } else if ("burst".equals(emitType) && !hasEmitted) {  // Burst emision
                 toEmit = maxPart;
+                hasEmitted = true;
             }
         }
         if (toEmit <= 0) return;
 
         //parallell emission
-        int chunk = (toEmit + numThreads - 1) / numThreads;
-        List<Thread> threads = new ArrayList<>();
-        for (int t = 0; t < numThreads; t++) {
+        int chunk = (toEmit + numThreads  - 1) / numThreads ;
+        tasks.clear();
+        for (int t = 0; t < numThreads ; t++) {
             final int start = t * chunk;
             final int end = Math.min(toEmit, start + chunk);
             if (start >= end) break;
 
-            Thread th = new Thread(() -> {
+            //creation of tasks
+            tasks.add(() -> {
                 List<Particle> local = new ArrayList<>(end - start);
                 for (int i = start; i < end; i++) {
                     local.add(new Particle(x, y,
@@ -53,19 +65,18 @@ public class Emitter {
                             Math.random() * 2 - 1,
                             15.0, width, height));
                 }
+                //merging
                 synchronized (particles) {
                     particles.addAll(local);
-                    totalEmitted += local.size();
                 }
-            }, "EmitterEmit-" + t);
-            threads.add(th);
-            th.start();
+                return null;
+            });
         }
-        for (Thread th : threads) {
-            try { th.join(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
-        }
-        if ("burst".equals(emitType)) {
-            hasEmitted = true;
+        //invoking tasks
+        try {
+            pool.invokeAll(tasks);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 
@@ -76,50 +87,81 @@ public class Emitter {
             snapshot = new ArrayList<>(particles);
         }
         int size = snapshot.size();
-        int chunk = (size + numThreads - 1) / numThreads;
+        if (size == 0) {
+            synchronized (particles) {
+                particles.clear();
+            }
+            return;
+        }
+
+        int chunk = (size + numThreads  - 1) / numThreads ;
 
         // parallel update
-        List<Thread> workers = new ArrayList<>();
-        for (int t = 0; t < numThreads; t++) {
+        tasks.clear();
+        for (int t = 0; t < numThreads ; t++) {
             final int start = t * chunk;
-            final int end = Math.min(size, start + chunk);
+            final int end   = Math.min(size, start + chunk);
             if (start >= end) break;
-            Thread upd = new Thread(() -> {
+            tasks.add(() -> {
                 for (int i = start; i < end; i++) {
                     snapshot.get(i).update();
                 }
-            }, "UpdateWorker-" + t);
-            workers.add(upd);
-            upd.start();
+                return null;
+            });
         }
-        for (Thread w : workers) {
-            try { w.join(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
-        }
+        try { pool.invokeAll(tasks); }
+        catch (InterruptedException e) { Thread.currentThread().interrupt(); }
 
         // parallel collision
-        workers.clear();
-        for (int t = 0; t < numThreads; t++) {
+        tasks.clear();
+        for (int t = 0; t < numThreads ; t++) {
             final int start = t * chunk;
-            final int end = Math.min(size, start + chunk);
+            final int end   = Math.min(size, start + chunk);
             if (start >= end) break;
-            Thread col = new Thread(() -> {
+            tasks.add(() -> {
                 for (int i = start; i < end; i++) {
                     Particle p1 = snapshot.get(i);
                     for (int j = i + 1; j < size; j++) {
-                        p1.colision(snapshot.get(j));
+                        Particle p2 = snapshot.get(j);
+                        if (Math.abs(p1.getX() - p2.getX()) < p1.getRadius() * 2 &&
+                                Math.abs(p1.getY() - p2.getY()) < p1.getRadius() * 2) {
+                            p1.colision(p2);
+                        }
                     }
                 }
-            }, "CollideWorker-" + t);
-            workers.add(col);
-            col.start();
+                return null;
+            });
         }
-        for (Thread w : workers) {
-            try { w.join(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
-        }
+        try { pool.invokeAll(tasks); }
+        catch (InterruptedException e) { Thread.currentThread().interrupt(); }
 
-        //remove
+        // parallel remove
+        tasks.clear();
+        List<List<Particle>> survivors = Collections.synchronizedList(new ArrayList<>());
+        for (int t = 0; t < numThreads ; t++) {
+            final int start = t * chunk;
+            final int end   = Math.min(size, start + chunk);
+            if (start >= end) break;
+            tasks.add(() -> {
+                List<Particle> localAlive = new ArrayList<>();
+                for (int i = start; i < end; i++) {
+                    if (snapshot.get(i).isAlive()) {
+                        localAlive.add(snapshot.get(i));
+                    }
+                }
+                survivors.add(localAlive);
+                return null;
+            });
+        }
+        try { pool.invokeAll(tasks); }
+        catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+
+        //merging
         synchronized (particles) {
-            particles.removeIf(p -> !p.isAlive());
+            particles.clear();
+            for (List<Particle> chunkList : survivors) {
+                particles.addAll(chunkList);
+            }
         }
     }
 
@@ -132,15 +174,12 @@ public class Emitter {
     }
 
     public boolean finished() {
-        if ("continuous".equals(emitType)) {
-            return totalEmitted >= maxPart && particles.isEmpty();
-        } else {
-            return hasEmitted && particles.isEmpty();
-        }
-    }
-    public int getParticlesCount() {
         synchronized (particles) {
-            return particles.size();
+            if ("continuous".equals(emitType)) {
+                return totalEmitted == maxPart && particles.isEmpty();
+            } else {
+                return hasEmitted && particles.isEmpty();
+            }
         }
     }
 }

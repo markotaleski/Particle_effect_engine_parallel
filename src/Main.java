@@ -62,9 +62,11 @@ public class Main extends Application {
                 emitter.update();
                 emitter.render(g);
                 if (emitter.finished()) {
+                    double avgFps = 0;
                     timer.stop();
-                    double avgFps = fpsList.stream().mapToInt(Integer::intValue).average().orElse(0.0);
+                    avgFps = fpsList.stream().mapToInt(Integer::intValue).average().orElse(0.0);
                     System.out.println("Average FPS: " + avgFps);
+                    emitter.shutdown();
                 }
             }
         };
@@ -75,7 +77,6 @@ public class Main extends Application {
         if (now - prev > 1_000_000_000) {
             fpsList.add(frameCount);
             System.out.println("FPS: " + frameCount);
-            System.out.println("Number of particles: " + (emitter != null ? emitter.getParticlesCount() : 0));
             prev = now;
             frameCount = 0;
         } else {

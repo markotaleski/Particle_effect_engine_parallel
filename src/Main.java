@@ -33,7 +33,7 @@ public class Main extends Application {
         primaryStage.setTitle("Particle Effect Engine");
         primaryStage.show();
 
-        build(200, 800, 600, 400, 300, "continuous");
+        //build(200, 800, 600, 400, 300, "continuous");
     }
 
     public void build(int nParticles, int width, int height,

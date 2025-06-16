@@ -56,10 +56,13 @@ public class Particle {
 
     //locking for safe render
     public void colision(Particle other) {
+        // Creating the lock
         Object lock1 = this, lock2 = other;
+        // making sure that the smaller lock is first
         if (System.identityHashCode(lock1) > System.identityHashCode(lock2)) {
             Object tmp = lock1; lock1 = lock2; lock2 = tmp;
         }
+        //locking
         synchronized (lock1) {
             synchronized (lock2) {
                 double dX = other.x - this.x;

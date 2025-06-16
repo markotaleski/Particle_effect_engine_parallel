@@ -1,4 +1,3 @@
-// EmitterParallel.java
 import javafx.scene.canvas.GraphicsContext;
 import java.util.*;
 import java.util.concurrent.*;
